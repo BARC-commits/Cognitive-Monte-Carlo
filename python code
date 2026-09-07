@@ -1,0 +1,612 @@
+# =============================================================================
+# SUPPLEMENTARY MATERIAL S1
+# =============================================================================
+# The Cognitive Monte Carlo: Externalizing Clinical Uncertainty Through
+# Transparent Probabilistic Modeling
+#
+# Illustrative Monte Carlo simulation of the recovery horizon for
+# acute viral conjunctivitis.
+#
+# IMPORTANT:
+# This simulation generates MODEL-DERIVED probabilities from explicitly
+# specified assumptions. It does NOT provide empirically validated clinical
+# event rates and should NOT be interpreted as a validated clinical
+# prediction model.
+#
+# The purpose of this simulation is to demonstrate how an implicit clinical
+# heuristic such as "worsens for 3–5 days and resolves in 1–2 weeks" can be
+# translated into an explicit probability distribution, propagated through
+# Monte Carlo sampling, and presented transparently.
+# =============================================================================
+
+
+# =============================================================================
+# 0. IMPORTS AND REPRODUCIBILITY
+# =============================================================================
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# Fixed random seed ensures exact numerical reproducibility
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+
+# Number of virtual iterations
+N_SIMULATIONS = 100_000
+
+
+# =============================================================================
+# 1. CLINICAL SCENARIO AND MODEL ASSUMPTIONS
+# =============================================================================
+#
+# Clinical heuristic:
+#   - Peak worsening occurs approximately during Days 3–5
+#   - Resolution generally occurs over approximately 1–2 weeks
+#
+# These statements are translated into explicit probability distributions.
+#
+# This is an illustrative representation of clinical uncertainty, not an
+# empirically fitted model.
+# =============================================================================
+
+# -------------------------------------------------------------------------
+# 1A. Peak worsening
+# -------------------------------------------------------------------------
+#
+# We represent the timing of peak worsening as a uniform distribution:
+#
+#       Peak ~ Uniform(3, 5)
+#
+# This means every value between Day 3 and Day 5 is assigned equal weight.
+# -------------------------------------------------------------------------
+
+PEAK_MIN_DAYS = 3.0
+PEAK_MAX_DAYS = 5.0
+
+peak_days = np.random.uniform(
+    PEAK_MIN_DAYS,
+    PEAK_MAX_DAYS,
+    N_SIMULATIONS
+)
+
+
+# -------------------------------------------------------------------------
+# 1B. Recovery-time distribution
+# -------------------------------------------------------------------------
+#
+# Recovery duration is modeled as:
+#
+#       Recovery = 3 days + Lognormal(mu, sigma)
+#
+# A lognormal distribution is used because recovery time is:
+#   - bounded below,
+#   - positive,
+#   - potentially right-skewed,
+#   - and capable of representing a longer recovery tail.
+#
+# CRITICAL PARAMETERIZATION:
+#
+# For a lognormal distribution:
+#
+#       Median(X) = exp(mu)
+#
+# Therefore, if the desired median TOTAL recovery time is 10.5 days and
+# the minimum onset component is 3 days:
+#
+#       exp(mu) = 10.5 - 3.0 = 7.5
+#
+#       mu = log(7.5)
+#
+# The previously used "- sigma**2 / 2" term has been removed because that
+# adjustment targets the MEAN of a lognormal distribution, not its median.
+# -------------------------------------------------------------------------
+
+TARGET_MEDIAN_DAYS = 10.5
+MINIMUM_ONSET_DAYS = 3.0
+SIGMA = 0.30
+
+# Correct parameterization for a target median of 10.5 days
+MU = np.log(TARGET_MEDIAN_DAYS - MINIMUM_ONSET_DAYS)
+
+# Theoretical median before the logical consistency constraint
+THEORETICAL_MEDIAN_DAYS = (
+    MINIMUM_ONSET_DAYS + np.exp(MU)
+)
+
+
+# -------------------------------------------------------------------------
+# 1C. Generate recovery times
+# -------------------------------------------------------------------------
+
+resolution_days_raw = (
+    MINIMUM_ONSET_DAYS
+    + np.random.lognormal(
+        mean=MU,
+        sigma=SIGMA,
+        size=N_SIMULATIONS
+    )
+)
+
+
+# -------------------------------------------------------------------------
+# 1D. Logical consistency constraint
+# -------------------------------------------------------------------------
+#
+# Recovery should not occur before the peak-worsening phase has ended.
+# We therefore impose a minimum interval of 0.5 days after peak worsening.
+#
+# This constraint has a negligible effect on the central part of the
+# distribution because the modeled recovery horizon is substantially longer
+# than the 3–5 day worsening phase.
+# -------------------------------------------------------------------------
+
+MIN_POST_PEAK_INTERVAL = 0.5
+
+resolution_days = np.maximum(
+    resolution_days_raw,
+    peak_days + MIN_POST_PEAK_INTERVAL
+)
+
+
+# =============================================================================
+# 2. MODEL-INTERNAL VALIDATION
+# =============================================================================
+#
+# These checks verify that the simulation behaves as intended.
+# They are NOT clinical validation.
+# =============================================================================
+
+simulated_median_days = np.median(resolution_days)
+
+constraint_fraction = np.mean(
+    resolution_days_raw < (peak_days + MIN_POST_PEAK_INTERVAL)
+) * 100.0
+
+
+# Check that the theoretical median is exactly the intended target
+assert np.isclose(
+    THEORETICAL_MEDIAN_DAYS,
+    TARGET_MEDIAN_DAYS,
+    atol=1e-10
+), "Theoretical median does not equal the target median."
+
+
+# =============================================================================
+# 3. DISTRIBUTION SUMMARY
+# =============================================================================
+
+P25 = np.percentile(resolution_days, 25)
+P50 = np.percentile(resolution_days, 50)
+P75 = np.percentile(resolution_days, 75)
+P95 = np.percentile(resolution_days, 95)
+P99 = np.percentile(resolution_days, 99)
+
+
+# =============================================================================
+# 4. CUMULATIVE RECOVERY PROBABILITIES
+# =============================================================================
+
+def cumulative_probability(day):
+    """
+    Model-derived probability of recovery on or before a specified day.
+
+    This is a probability generated by the simulation and is NOT an
+    empirically estimated clinical event rate.
+    """
+    return np.mean(resolution_days <= day)
+
+
+PROB_DAY_7 = cumulative_probability(7.0)
+PROB_DAY_10 = cumulative_probability(10.0)
+PROB_DAY_14 = cumulative_probability(14.0)
+
+TAIL_BEYOND_DAY_14 = 1.0 - PROB_DAY_14
+TAIL_BEYOND_DAY_21 = 1.0 - cumulative_probability(21.0)
+
+
+# =============================================================================
+# 5. DAY-BY-DAY RECOVERY PROBABILITIES
+# =============================================================================
+
+DAILY_RESULTS = []
+
+previous_cumulative = 0.0
+
+for day in range(3, 22):
+
+    cumulative = cumulative_probability(day)
+    daily_probability = cumulative - previous_cumulative
+
+    DAILY_RESULTS.append({
+        "day": day,
+        "daily_probability": daily_probability,
+        "cumulative_probability": cumulative
+    })
+
+    previous_cumulative = cumulative
+
+
+# =============================================================================
+# 6. CONSOLE OUTPUT
+# =============================================================================
+
+print("=" * 78)
+print("THE COGNITIVE MONTE CARLO")
+print("Externalizing Clinical Uncertainty Through Transparent")
+print("Probabilistic Modeling")
+print("=" * 78)
+
+print("\nILLUSTRATIVE CLINICAL SCENARIO")
+print("-" * 78)
+print("Scenario: Acute viral conjunctivitis recovery horizon")
+print(f"Virtual iterations: {N_SIMULATIONS:,}")
+print(f"Random seed: {RANDOM_SEED}")
+
+print("\nMODEL ASSUMPTIONS")
+print("-" * 78)
+print(
+    f"Peak worsening: Uniform({PEAK_MIN_DAYS:.1f}, "
+    f"{PEAK_MAX_DAYS:.1f}) days"
+)
+print(
+    "Recovery: "
+    f"{MINIMUM_ONSET_DAYS:.1f} days + "
+    f"Lognormal(mu={MU:.6f}, sigma={SIGMA:.2f})"
+)
+print(f"Target median recovery: {TARGET_MEDIAN_DAYS:.1f} days")
+print(
+    f"Theoretical median from parameterization: "
+    f"{THEORETICAL_MEDIAN_DAYS:.2f} days"
+)
+print(
+    f"Minimum post-peak interval: "
+    f"{MIN_POST_PEAK_INTERVAL:.1f} days"
+)
+
+print("\nMODEL-INTERNAL CHECKS")
+print("-" * 78)
+print(
+    f"Simulated median recovery: "
+    f"{simulated_median_days:.2f} days"
+)
+print(
+    f"Difference from target median: "
+    f"{simulated_median_days - TARGET_MEDIAN_DAYS:+.2f} days"
+)
+print(
+    f"Iterations affected by post-peak constraint: "
+    f"{constraint_fraction:.4f}%"
+)
+
+print("\nPROBABILITY DISTRIBUTION SUMMARY")
+print("-" * 78)
+print(f"25th Percentile (P25):       Day {P25:.1f}")
+print(f"50th Percentile (Median):    Day {P50:.1f}")
+print(f"75th Percentile (P75):       Day {P75:.1f}")
+print(f"95th Percentile:             Day {P95:.1f}")
+print(f"99th Percentile:             Day {P99:.1f}")
+
+print("\nMODEL-DERIVED CUMULATIVE RECOVERY PROBABILITIES")
+print("-" * 78)
+print(f"P(Recovery <= Day 7):        {PROB_DAY_7 * 100:5.1f}%")
+print(f"P(Recovery <= Day 10):       {PROB_DAY_10 * 100:5.1f}%")
+print(f"P(Recovery <= Day 14):       {PROB_DAY_14 * 100:5.1f}%")
+print(f"P(Recovery > Day 14):        {TAIL_BEYOND_DAY_14 * 100:5.1f}%")
+print(f"P(Recovery > Day 21):        {TAIL_BEYOND_DAY_21 * 100:5.1f}%")
+
+print("\nDAY-BY-DAY MODEL-DERIVED RECOVERY PROBABILITY")
+print("-" * 78)
+print(
+    f"{'Timeline':<15}"
+    f"{'Daily %':>12}"
+    f"{'Cumulative %':>18}"
+)
+print("-" * 78)
+
+for result in DAILY_RESULTS:
+
+    day = result["day"]
+    daily = result["daily_probability"] * 100
+    cumulative = result["cumulative_probability"] * 100
+
+    print(
+        f"Day {day:<11}"
+        f"{daily:>11.1f}%"
+        f"{cumulative:>17.1f}%"
+    )
+
+print(
+    f"> Day 21"
+    f"{TAIL_BEYOND_DAY_21 * 100:>10.1f}%"
+    f"{'100.0%':>17}"
+)
+
+print("=" * 78)
+
+print("\nIMPORTANT INTERPRETATION")
+print("-" * 78)
+print(
+    "These probabilities are model-derived outputs conditional on the "
+    "specified assumptions."
+)
+print(
+    "They are NOT empirically estimated clinical event rates and do not "
+    "constitute a validated clinical prediction model."
+)
+print(
+    "Increasing the number of Monte Carlo iterations improves numerical "
+    "sampling stability but does not improve the validity of the underlying "
+    "clinical assumptions."
+)
+print("=" * 78)
+
+
+# =============================================================================
+# 7. PUBLICATION-READY VISUALIZATION
+# =============================================================================
+#
+# The figure deliberately labels the distribution as SIMULATED/MODEL-DERIVED
+# to avoid implying that the curve represents an empirically observed
+# clinical recovery distribution.
+# =============================================================================
+
+fig, ax = plt.subplots(
+    figsize=(10, 6),
+    dpi=300
+)
+
+
+# -------------------------------------------------------------------------
+# 7A. Histogram-based density representation
+# -------------------------------------------------------------------------
+#
+# A normalized histogram is used rather than presenting a KDE as though it
+# were an empirically estimated density. The histogram directly represents
+# the simulated Monte Carlo sample.
+# -------------------------------------------------------------------------
+
+ax.hist(
+    resolution_days,
+    bins=100,
+    density=True,
+    alpha=0.35,
+    edgecolor="none",
+    label="Simulated recovery distribution"
+)
+
+
+# -------------------------------------------------------------------------
+# 7B. Smooth density approximation for visualization
+# -------------------------------------------------------------------------
+#
+# This is purely a visual aid to show the overall shape of the simulated
+# distribution.
+# -------------------------------------------------------------------------
+
+x_grid = np.linspace(
+    2.0,
+    22.0,
+    500
+)
+
+
+# Gaussian kernel density estimate implemented directly with NumPy
+# to avoid dependence on an external plotting package.
+bandwidth = 0.20
+
+density = np.zeros_like(x_grid)
+
+# Process the sample in chunks to limit memory use
+CHUNK_SIZE = 5000
+
+for start in range(0, N_SIMULATIONS, CHUNK_SIZE):
+
+    sample_chunk = resolution_days[
+        start:start + CHUNK_SIZE
+    ]
+
+    z = (
+        x_grid[:, None]
+        - sample_chunk[None, :]
+    ) / bandwidth
+
+    density += np.sum(
+        np.exp(-0.5 * z**2),
+        axis=1
+    )
+
+density /= (
+    N_SIMULATIONS
+    * bandwidth
+    * np.sqrt(2.0 * np.pi)
+)
+
+
+ax.plot(
+    x_grid,
+    density,
+    linewidth=2.0,
+    label="Smoothed simulation density"
+)
+
+
+# -------------------------------------------------------------------------
+# 7C. Clinical reference region
+# -------------------------------------------------------------------------
+
+ax.axvspan(
+    PEAK_MIN_DAYS,
+    PEAK_MAX_DAYS,
+    alpha=0.12,
+    label="Peak worsening assumption (Days 3–5)"
+)
+
+
+# -------------------------------------------------------------------------
+# 7D. Key percentile markers
+# -------------------------------------------------------------------------
+
+ax.axvline(
+    P50,
+    linestyle="--",
+    linewidth=2.0,
+    label=f"Simulated median: Day {P50:.1f}"
+)
+
+ax.axvline(
+    P95,
+    linestyle=":",
+    linewidth=2.0,
+    label=f"95th percentile: Day {P95:.1f}"
+)
+
+ax.axvline(
+    P99,
+    linestyle="-.",
+    linewidth=2.0,
+    label=f"99th percentile: Day {P99:.1f}"
+)
+
+
+# -------------------------------------------------------------------------
+# 7E. Labels and title
+# -------------------------------------------------------------------------
+
+ax.set_title(
+    "Cognitive Monte Carlo Simulation: "
+    "Acute Viral Conjunctivitis Recovery Horizon",
+    fontsize=13,
+    fontweight="bold",
+    pad=15
+)
+
+ax.set_xlabel(
+    "Days from Symptom Onset",
+    fontsize=11,
+    labelpad=10
+)
+
+ax.set_ylabel(
+    "Simulated Probability Density",
+    fontsize=11,
+    labelpad=10
+)
+
+ax.set_xlim(
+    2,
+    22
+)
+
+ax.set_xticks(
+    range(2, 23)
+)
+
+
+# -------------------------------------------------------------------------
+# 7F. Embedded model-derived statistics
+# -------------------------------------------------------------------------
+
+stats_text = (
+    f"Monte Carlo iterations: {N_SIMULATIONS:,}\n"
+    f"Target median: {TARGET_MEDIAN_DAYS:.1f} days\n"
+    f"Simulated median: {P50:.1f} days\n"
+    f"IQR: {P25:.1f}–{P75:.1f} days\n"
+    f"P(recovery ≤7 d): {PROB_DAY_7 * 100:.1f}%\n"
+    f"P(recovery ≤10 d): {PROB_DAY_10 * 100:.1f}%\n"
+    f"P(recovery ≤14 d): {PROB_DAY_14 * 100:.1f}%\n"
+    f"95th percentile: {P95:.1f} days"
+)
+
+
+ax.text(
+    0.97,
+    0.95,
+    stats_text,
+    transform=ax.transAxes,
+    fontsize=9.5,
+    verticalalignment="top",
+    horizontalalignment="right",
+    bbox=dict(
+        boxstyle="round,pad=0.6",
+        facecolor="white",
+        edgecolor="#cccccc",
+        alpha=0.9
+    )
+)
+
+
+# -------------------------------------------------------------------------
+# 7G. Legend and layout
+# -------------------------------------------------------------------------
+
+ax.legend(
+    loc="upper left",
+    frameon=True,
+    facecolor="white",
+    framealpha=0.9
+)
+
+ax.grid(
+    alpha=0.20,
+    linestyle="--",
+    linewidth=0.6
+)
+
+plt.tight_layout()
+
+
+# =============================================================================
+# 8. SAVE HIGH-RESOLUTION FIGURE
+# =============================================================================
+
+FIGURE_FILENAME = (
+    "Figure_S1_Cognitive_Monte_Carlo.png"
+)
+
+plt.savefig(
+    FIGURE_FILENAME,
+    dpi=300,
+    bbox_inches="tight"
+)
+
+
+# Display figure
+plt.show()
+
+
+# =============================================================================
+# 9. FINAL REPRODUCIBILITY SUMMARY
+# =============================================================================
+
+print("\nFIGURE SAVED")
+print("-" * 78)
+print(FIGURE_FILENAME)
+
+print("\nFINAL MODEL SUMMARY")
+print("-" * 78)
+print(
+    f"Target median recovery time: "
+    f"{TARGET_MEDIAN_DAYS:.1f} days"
+)
+print(
+    f"Theoretical median: "
+    f"{THEORETICAL_MEDIAN_DAYS:.2f} days"
+)
+print(
+    f"Observed Monte Carlo median: "
+    f"{P50:.2f} days"
+)
+print(
+    f"Model-derived P(recovery <=14 days): "
+    f"{PROB_DAY_14 * 100:.1f}%"
+)
+print(
+    f"Model-derived P(recovery >14 days): "
+    f"{TAIL_BEYOND_DAY_14 * 100:.1f}%"
+)
+print(
+    "\nReminder: These are outputs of the specified illustrative model, "
+    "not empirically validated clinical probabilities."
+)
+print("=" * 78)
